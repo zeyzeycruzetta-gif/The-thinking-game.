@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>The thinking game</title>
+<style>
+  body {
+  font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+  max-width:1000px;
+  margin:24px auto;
+  padding:20px;
+  border-radius:10px;
+  box-shadow:0 4px 20px rgba(0,0,0,.05);
+
+  /* new background */
+  background: url('bg.jpg') center/cover no-repeat fixed;
+ color: #111; /* makes text inside cards darker for readability */
+}
+  h1{margin:0 0 6px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .card {
+  background: rgba(255, 255, 255, 0.9); /* semi-transparent white */
+  padding:12px;
+  border-radius:8px;x
+  box-shadow:0 1px 6px rgba(2,6,23,.04);
+  flex:1 1 320px;
+}
+  input,textarea,select,button{font:inherit;padding:8px;border-radius:6px;border:1px solid #e2e8f0}
+  button{cursor:pointer}
+  .muted{color:#6b7280;font-size:13px}
+  .list{margin-top:8px}
+  .item{display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid #f1f5f9}
+  .pts{font-weight:700;margin-left:8px}
+  .positive{color:green}
+  .negative{color:red}
+  .log{max-height:220px;overflow:auto}
+  .small{font-size:13px}
+  .controls button{margin-left:6px}
+  .center{text-align:center}
+  .badge{background:#111827;color:#fff;padding:6px 10px;border-radius:999px;font-weight:700}
+</style>
+</head>
+<body>
+  <h1>Do not fail me.</h1>
+  <p class="muted">Add actions (positive or negative points), complete them, choose rewards, and journal your wins.</p>
+
+  <div class="row">
+    <div class="card">
+      <h2>Current Score <span id="score" class="badge">0</span></h2>
+      <p class="muted small">Your score changes when you complete actions or select rewards.</p>
+      <div style="margin-top:12px">
+        <strong>Quick info</strong>
+        <ul class="muted small">
+          <li>Actions: anything you do (or fail to do). Points can be negative.</li>
+          <li>Rewards: items you can claim (cost deducted when chosen at completion).</li>
+          <li>Journal: optional note you can attach when completing an action.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Add Action</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="actionName" placeholder="Action (eg. Walk 20 mins)" />
+        <input id="actionPoints" placeholder="Points (eg. 10 or -5)" type="number" style="width:140px"/>
+        <button id="addActionBtn">Add Action</button>
+      </div>
+      <div class="list" id="actionsList"></div>
+    </div>
+
+    <div class="card">
+      <h3>Add Reward</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="rewardName" placeholder="Reward (eg. Watch 1 episode)" />
+        <input id="rewardCost" placeholder="Cost (points)" type="number" style="width:140px"/>
+        <button id="addRewardBtn">Add Reward</button>
+      </div>
+      <div class="list" id="rewardsList"></div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card" style="flex:1 1 640px">
+      <h3>Completion Log</h3>
+      <div class="log" id="log"></div>
+      <div style="margin-top:10px" class="center muted small">
+        Local-only storage: data saved in your browser. To export/reset use the buttons below.
+      </div>
+      <div style="margin-top:10px" class="center">
+        <button id="exportBtn">Export JSON</button>
+        <button id="importBtn">Import JSON</button>
+        <button id="resetBtn">Reset All</button>
+        <input id="importFile" type="file" accept=".json" style="display:none" />
+      </div>
+    </div>
+
+    <div class="card" style="flex:1 1 300px">
+      <h3>Tips & Notes</h3>
+      <ul class="muted small">
+        <li>Make small actions worth small points, larger tasks higher points.</li>
+        <li>Negative-point actions are good for tracking friction (temptations, procrastination).</li>
+        <li>Rewards are chosen after completing an action to make them earned and deliberate.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- completion modal (simple) -->
+  <div id="completionModal" style="display:none;position:fixed;inset:0;background:rgba(2,6,23,.45);align-items:center;justify-content:center;">
+    <div style="background:#fff;padding:18px;border-radius:10px;width:90%;max-width:520px">
+      <h3 id="modalActionTitle">Complete action</h3>
+      <div style="margin-bottom:8px">
+        <label class="muted small">Journal (optional)</label><br>
+        <textarea id="journalInput" rows="4" style="width:100%"></textarea>
+      </div>
+      <div style="margin-bottom:8px">
+        <label class="muted small">Pick a reward (optional) — reward cost deducted immediately</label>
+        <select id="rewardSelect" style="width:100%;margin-top:6px">
+          <option value="">-- No reward --</option>
+        </select>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button id="cancelComplete">Cancel</button>
+        <button id="confirmComplete">Confirm Complete</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ======= Simple client-side app with localStorage persistence ======= */
+
+const STORAGE_KEY = 'action_points_v1';
+
+// App state (loaded from storage or defaults)
+let state = {
+  score: 100,   // ⬅️ changed from 0 to 100
+  actions: [],
+  rewards: [],
+  log: []
+};
+
+// util
+const $ = id => document.getElementById(id);
+const save = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+const load = () => {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw) {
+    try { state = JSON.parse(raw); } catch(e){}
+  }
+  renderAll();
+};
+const uid = ()=> Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+
+/* ---- CRUD for actions & rewards ---- */
+function addAction(name, pts) {
+  if(!name) return alert('Add an action name.');
+  const p = Number(pts);
+  if(Number.isNaN(p)) return alert('Points must be a number.');
+  state.actions.push({id: uid(), name: name.trim(), pts: p});
+  save(); renderAll();
+}
+
+function addReward(name, cost) {
+  if(!name) return alert('Add reward name.');
+  const c = Number(cost);
+  if(Number.isNaN(c) || c < 0) return alert('Cost must be 0 or positive number.');
+  state.rewards.push({id: uid(), name: name.trim(), cost: c});
+  save(); renderAll();
+}
+
+function deleteAction(id){
+  state.actions = state.actions.filter(a=>a.id !== id);
+  save(); renderAll();
+}
+function deleteReward(id){
+  state.rewards = state.rewards.filter(r=>r.id !== id);
+  save(); renderAll();
+}
+
+/* ---- Completion flow ---- */
+let completionTarget = null;
+function openCompleteModal(actionId) {
+  const a = state.actions.find(x=>x.id===actionId);
+  if(!a) return;
+  completionTarget = a;
+  $('modalActionTitle').innerText = `Complete: ${a.name} (${a.pts>0?'+':''}${a.pts} pts)`;
+  $('journalInput').value = '';
+  const sel = $('rewardSelect');
+  sel.innerHTML = '<option value="">-- No reward --</option>';
+  state.rewards.forEach(r=>{
+    const opt = document.createElement('option');
+    opt.value = r.id;
+    opt.innerText = `${r.name} — ${r.cost} pts`;
+    sel.appendChild(opt);
+  });
+  $('completionModal').style.display = 'flex';
+}
+
+function confirmComplete() {
+  if(!completionTarget) return;
+  const journal = $('journalInput').value.trim();
+  const rewardId = $('rewardSelect').value || null;
+  const reward = state.rewards.find(r=>r.id===rewardId) || null;
+
+  // Apply action points immediately
+  const ptsApplied = Number(completionTarget.pts);
+  state.score = Number(state.score) + ptsApplied;
+
+  // If reward selected, deduct cost immediately and record it
+  let rewardCost = null;
+  let rewardName = null;
+  if(reward){
+    rewardCost = Number(reward.cost);
+    rewardName = reward.name;
+    state.score = Number(state.score) - rewardCost;
+  }
+
+  // Create log entry
+  state.log.unshift({
+    time: new Date().toISOString(),
+    actionId: completionTarget.id,
+    actionName: completionTarget.name,
+    ptsApplied: ptsApplied,
+    rewardId: reward ? reward.id : null,
+    rewardName: rewardName,
+    rewardCost: rewardCost,
+    journal: journal || null
+  });
+
+  // Persist & update UI
+  save();
+  closeModal();
+  renderAll();
+}
+
+function closeModal(){
+  $('completionModal').style.display = 'none';
+  completionTarget = null;
+}
+
+/* ---- Render ---- */
+function renderAll(){
+  $('score').innerText = String(state.score);
+
+  // actions list
+  const al = $('actionsList');
+  al.innerHTML = '<div class="muted small">Your actions</div>';
+  if(state.actions.length===0) al.innerHTML += '<div class="muted small">No actions yet.</div>';
+  state.actions.forEach(a=>{
+    const div = document.createElement('div');
+    div.className = 'item';
+    const left = document.createElement('div');
+    left.innerHTML = `<strong>${escapeHtml(a.name)}</strong><div class="muted small">Points: <span class="pts ${a.pts>=0? "positive": "negative"}">${a.pts}</span></div>`;
+    const right = document.createElement('div');
+    right.className = 'controls';
+    const completeBtn = document.createElement('button');
+    completeBtn.innerText = 'Complete';
+    completeBtn.onclick = ()=> openCompleteModal(a.id);
+    const editBtn = document.createElement('button');
+    editBtn.innerText = 'Edit';
+    editBtn.onclick = ()=> {
+      const newName = prompt('Edit action name', a.name);
+      if(newName===null) return;
+      const newPts = prompt('Edit points (use negative for deduction)', String(a.pts));
+      if(newPts===null) return;
+      const p = Number(newPts);
+      if(Number.isNaN(p)) return alert('Points must be a number.');
+      a.name = newName.trim(); a.pts = p;
+      save(); renderAll();
+    };
+    const delBtn = document.createElement('button');
+    delBtn.innerText = 'Delete';
+    delBtn.onclick = ()=> {
+      if(confirm('Delete action?')) { deleteAction(a.id); }
+    };
+    right.appendChild(completeBtn);
+    right.appendChild(editBtn);
+    right.appendChild(delBtn);
+    div.appendChild(left); div.appendChild(right);
+    al.appendChild(div);
+  });
+
+  // rewards list
+  const rl = $('rewardsList');
+  rl.innerHTML = '<div class="muted small">Your rewards</div>';
+  if(state.rewards.length===0) rl.innerHTML += '<div class="muted small">No rewards yet.</div>';
+  state.rewards.forEach(r=>{
+    const div = document.createElement('div');
+    div.className = 'item';
+    div.innerHTML = `<div><strong>${escapeHtml(r.name)}</strong><div class="muted small">Cost: <span class="pts">${r.cost}</span></div></div>`;
+    const right = document.createElement('div');
+    const editBtn = document.createElement('button');
+    editBtn.innerText = 'Edit';
+    editBtn.onclick = ()=> {
+      const newName = prompt('Edit reward name', r.name);
+      if(newName===null) return;
+      const newCost = prompt('Edit cost', String(r.cost));
+      if(newCost===null) return;
+      const c = Number(newCost);
+      if(Number.isNaN(c) || c<0) return alert('Cost must be a number >= 0.');
+      r.name = newName.trim(); r.cost = c;
+      save(); renderAll();
+    };
+    const delBtn = document.createElement('button');
+    delBtn.innerText = 'Delete';
+    delBtn.onclick = ()=> {
+      if(confirm('Delete reward?')) deleteReward(r.id);
+    };
+    right.appendChild(editBtn);
+    right.appendChild(delBtn);
+    div.appendChild(right);
+    rl.appendChild(div);
+  });
+
+  // log
+  const lg = $('log');
+  lg.innerHTML = '';
+  if(state.log.length===0) lg.innerHTML = '<div class="muted small">No completions yet.</div>';
+  state.log.forEach(entry=>{
+    const d = document.createElement('div');
+    d.style.padding = '8px';
+    d.style.borderBottom = '1px solid #f1f5f9';
+    const t = new Date(entry.time);
+    d.innerHTML = `<div><strong>${escapeHtml(entry.actionName)}</strong> <span class="muted small">(${t.toLocaleString()})</span></div>
+                   <div class="muted small">Points: <span class="${entry.ptsApplied>=0?'positive':'negative'}">${entry.ptsApplied}</span>
+                   ${entry.rewardName? `• Reward: ${escapeHtml(entry.rewardName)} (-${entry.rewardCost})`: ''}</div>
+                   ${entry.journal? `<div style="margin-top:6px"><em>${escapeHtml(entry.journal)}</em></div>` : ''}`;
+    lg.appendChild(d);
+  });
+}
+
+/* helper */
+function escapeHtml(s){
+  if(!s) return '';
+  return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+}
+
+/* ---- UI wiring ---- */
+$('addActionBtn').addEventListener('click', ()=> {
+  addAction($('actionName').value, $('actionPoints').value);
+  $('actionName').value=''; $('actionPoints').value='';
+});
+$('addRewardBtn').addEventListener('click', ()=> {
+  addReward($('rewardName').value, $('rewardCost').value);
+  $('rewardName').value=''; $('rewardCost').value='';
+});
+$('cancelComplete').addEventListener('click', closeModal);
+$('confirmComplete').addEventListener('click', confirmComplete);
+
+// Export & import
+$('exportBtn').addEventListener('click', ()=>{
+  const data = JSON.stringify(state, null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'action_points_export.json';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+$('importBtn').addEventListener('click', ()=> $('importFile').click());
+$('importFile').addEventListener('change', (e)=>{
+  const f = e.target.files[0]; if(!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const imported = JSON.parse(ev.target.result);
+      if(!confirm('Import will replace your current local data. Continue?')) return;
+      state = imported;
+      save(); renderAll();
+      alert('Imported.');
+    } catch(err){ alert('Invalid file.'); }
+  };
+  reader.readAsText(f);
+});
+
+// Reset
+$('resetBtn').addEventListener('click', ()=>{
+  if(confirm('Reset all local data? This cannot be undone.')) {
+    state = {score:100,actions:[],rewards:[],log:[]};  // ⬅️ changed from 0 to 100
+    save(); 
+    renderAll();
+  }
+});
+
+// load existing or defaults
+load();
+
+/* Accessibility: close modal on background click */
+document.getElementById('completionModal').addEventListener('mousedown', function(e){
+  if(e.target === this) closeModal();
+});
+</script>
+</body>
+</html>
